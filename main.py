@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 from load_data2 import get_data_path, load4train
 from network import MLDA,U,V
 from idcd import idcd
+import scipy.stats
 import numpy as np
 from sklearn.metrics import f1_score
 from scipy.spatial.distance import jensenshannon
@@ -48,7 +49,8 @@ def calculate_kl_divergence(source_features, target_features):
     return np.mean(kl_divergence)
 
 device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-net_config = {"EPOCH": 600, "fts": 750, "cls": 2, "lr": 5e-3, "weight_decay": 0.0005,"BS":64}
+net_config = {"EPOCH": 600, "fts": 750, "cls": 2, "lr": 5e-3, "weight_decay": 0.0005,"BS":64, \
+              "LOSS_WEIGHT" :0.5}
 config_path = {"file_path": "data path",
                "label_path": "label path"}
 files = [0,'01sub_8.mat','02sub.mat','03sub.mat','04sub.mat','05sub.mat','06sub.mat','07sub.mat',\
@@ -83,10 +85,10 @@ for i in range(1,12):
 
     model = MLDA(net_config["fts"],net_config["cls"])
     model.to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=net_config["lr"], weight_decay=net_config["weight_decay"])
     u = U(32,0.05).to(device)
     v = V(32,0.05).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=net_config["lr"], weight_decay=net_config["weight_decay"])
     optimizer_u = torch.optim.SGD(u.parameters(), lr=net_config["lr"], weight_decay=net_config["weight_decay"])
     optimizer_v = torch.optim.SGD(v.parameters(), lr=net_config["lr"], weight_decay=net_config["weight_decay"])
 
@@ -115,19 +117,19 @@ for i in range(1,12):
             src_feature1 = u(src_feature)
             tar_feature1 = v(tar_feature)
 
-            gdd_loss = calculate_js_divergence(src_feature1.detach().cpu().numpy(), \
-                                                tar_feature1.detach().cpu().numpy())
+            inter_domain_loss = scipy.stats.wasserstein_distance(src_feature1.detach().cpu().numpy().flatten(), \
+                                                                 tar_feature1.detach().cpu().numpy().flatten())
 
             max_prob, pseudo_label1 = torch.max(tar_output_cls, dim=1)
 
             confident_example = tar_feature
             confident_label = pseudo_label1
 
-            lsd_loss = idcd(src_feature, confident_example, src_label_cls, confident_label)
+            intra_domain_loss = idcd(src_feature, confident_example, src_label_cls, confident_label)
 
-            LOSS_WEIGHT = 0.5
+
             # LOSS_WEIGHT = 1.0 / (1.0 + torch.exp(torch.tensor(100.0 - epoch)))
-            train_loss = cls_loss + 2 * ((1 - LOSS_WEIGHT) * gdd_loss + LOSS_WEIGHT * lsd_loss)
+            train_loss = cls_loss + 2 * ((1 - net_config["LOSS_WEIGHT"]) * inter_domain_loss + net_config["LOSS_WEIGHT"] * intra_domain_loss)
 
             optimizer.zero_grad()
             optimizer_u.zero_grad()
